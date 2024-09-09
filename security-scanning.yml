@@ -1,0 +1,343 @@
+include:
+  - template: Security/SAST-IaC.gitlab-ci.yml
+  - template: Security/SAST.gitlab-ci.yml
+  - template: Security/Secret-Detection.gitlab-ci.yml
+
+variables:
+  SCAN_KUBERNETES_MANIFESTS: "false"
+  SAST_EXCLUDED_ANALYZERS: ""
+  SAST_EXCLUDED_PATHS: ""
+
+### Evaluation jobs
+.evaluate_vulnerabilities: &evaluate_vulnerabilities
+- |
+    printf "Evaluating results...\n"
+    json_pp() {
+        cat "$1" | sed 's/{/{\n/g; s/}/\n}/g; s/,/,\n/g; s/":"/": "/g' | sed '/}/s/\n//g'
+    }
+    json_pp gl-sast-report.json
+    RED='\033[0;31m'
+    GREEN='\033[0;32m'
+    NC='\033[0m' # No Color
+    if grep -q '"vulnerabilities":\[\]' gl-sast-report.json; then
+    printf "${GREEN}\nNo vulnerabilities found :)\nGood to go!${NC}\n"
+    else
+        printf "${RED}\nVulnerabilities found!!!\nPlease check the vulnerabilities array above or the report gl-sast-report.json for more info.${NC}\n"
+        exit 1
+    fi
+
+.evaluate_sast_vulnerabilities: &evaluate_sast_vulnerabilities
+    - |
+        python3 - <<EOF
+        import json
+        import sys
+
+        print("Evaluating results...\n")
+
+        # Load the JSON report
+        with open('gl-sast-report.json') as f:
+            data = json.load(f)
+
+        # Extract the vulnerabilities
+        vulnerabilities = data.get('vulnerabilities', [])
+
+        # Write the formatted report
+        with open('formatted_report.json', 'w') as f:
+            json.dump(vulnerabilities, f, indent=4)
+
+        # Print the vulnerabilities
+        print("\nVulnerabilities:\n")
+        print(json.dumps(vulnerabilities, indent=4))
+
+        # Define the severity types to check
+        severities = ["Critical", "Medium", "High"]
+
+        # Loop over the severity types
+        for severity in severities:
+            # Check if the severity type is found in the formatted JSON report
+            if any(vuln.get('severity') == severity for vuln in vulnerabilities):
+                print(f"\033[0;31m\nVulnerability of severity {severity} found!!!\nPlease check the details above or the report gl-sast-report.json for more info.\033[0m\n")
+                sys.exit(1)
+
+        # If no vulnerabilities of the specified severities were found
+        if vulnerabilities:
+            print("\033[0;33m\nVulnerabilities found but not of severity {}.\nPlease check the details above or the report gl-sast-report.json for more info.\033[0m\n".format(", ".join(severities)))
+        else:
+            print("\033[0;32m\nNo vulnerabilities found :)\nGood to go!\033[0m\n")
+        EOF
+
+# SAST
+
+sast:
+  tags: 
+    - $AREA_PERMALINK
+    - $ENVIRONMENT
+  stage: test
+  artifacts:
+    reports:
+      sast: gl-sast-report.json
+  allow_failure: false
+  rules:
+    - if: $CI_PIPELINE_SOURCE != "push" && $CI_COMMIT_REF_NAME != "main"
+      when: never
+  variables:
+    SEARCH_MAX_DEPTH: 4
+  script:
+    - echo "$CI_JOB_NAME is used for configuration only, and its script should not be executed"
+    - exit 1
+
+brakeman-sast:
+  tags: 
+    - $AREA_PERMALINK
+    - $ENVIRONMENT
+  extends: .sast-analyzer
+  allow_failure: false
+  script:
+    - /analyzer run
+    #- *evaluate_vulnerabilities
+  rules:
+    - if: $SAST_DISABLED == 'true' || $SAST_DISABLED == '1'
+      when: never
+    - if: $SAST_EXCLUDED_ANALYZERS =~ /brakeman/
+      when: never
+    - if: $CI_PIPELINE_SOURCE != "push" && $CI_COMMIT_REF_NAME != "main"
+      exists:
+        - '**/*.rb'
+        - '**/Gemfile'
+    - if: $CI_PIPELINE_SOURCE != "trigger"
+      when: never
+
+kubesec-sast:
+  tags: 
+    - $AREA_PERMALINK
+    - $ENVIRONMENT
+  extends: .sast-analyzer
+  allow_failure: false
+  image:
+    name: "$SAST_ANALYZER_IMAGE"
+  script:
+    - /analyzer run
+    - *evaluate_sast_vulnerabilities
+  rules:
+    - if: $SAST_DISABLED == 'true' || $SAST_DISABLED == '1'
+      when: never
+    - if: $SAST_EXCLUDED_ANALYZERS =~ /kubesec/
+      when: never
+    - if: $CI_PIPELINE_SOURCE != "push" && $CI_COMMIT_REF_NAME != "main" &&
+          $SCAN_KUBERNETES_MANIFESTS == 'true'
+
+.mobsf-sast:
+  extends: .sast-analyzer
+
+mobsf-android-sast:
+  tags: 
+    - $AREA_PERMALINK
+    - $ENVIRONMENT
+  extends: .mobsf-sast
+  allow_failure: false
+  script:
+    - /analyzer run
+    - *evaluate_sast_vulnerabilities
+  rules:
+    - if: $SAST_DISABLED == 'true' || $SAST_DISABLED == '1'
+      when: never
+    - if: $SAST_EXCLUDED_ANALYZERS =~ /mobsf/
+      when: never
+    - if: $CI_PIPELINE_SOURCE != "push" && $CI_COMMIT_REF_NAME != "main" &&
+          $SAST_EXPERIMENTAL_FEATURES == 'true'
+      exists:
+        - '**/*.apk'
+        - '**/AndroidManifest.xml'
+
+mobsf-ios-sast:
+  tags: 
+    - $AREA_PERMALINK
+    - $ENVIRONMENT
+  extends: .mobsf-sast
+  allow_failure: false
+  script:
+    - /analyzer run
+    - *evaluate_sast_vulnerabilities
+  rules:
+    - if: $SAST_DISABLED == 'true' || $SAST_DISABLED == '1'
+      when: never
+    - if: $SAST_EXCLUDED_ANALYZERS =~ /mobsf/
+      when: never
+    - if: $CI_PIPELINE_SOURCE != "push" && $CI_COMMIT_REF_NAME != "main" &&
+          $SAST_EXPERIMENTAL_FEATURES == 'true'
+      exists:
+        - '**/*.ipa'
+        - '**/*.xcodeproj/*'
+
+phpcs-security-audit-sast:
+  tags: 
+    - $AREA_PERMALINK
+    - $ENVIRONMENT
+  extends: .sast-analyzer
+  allow_failure: false
+  script:
+    - /analyzer run
+    - *evaluate_vulnerabilities
+  rules:
+    - if: $SAST_DISABLED == 'true' || $SAST_DISABLED == '1'
+      when: never
+    - if: $SAST_EXCLUDED_ANALYZERS =~ /phpcs-security-audit/
+      when: never
+    - if: $CI_PIPELINE_SOURCE != "push" && $CI_COMMIT_REF_NAME != "main"
+      exists:
+        - '**/*.php'
+
+pmd-apex-sast:
+  tags: 
+    - $AREA_PERMALINK
+    - $ENVIRONMENT
+  extends: .sast-analyzer
+  allow_failure: false
+  script:
+    - /analyzer run
+    - *evaluate_sast_vulnerabilities
+  rules:
+    - if: $SAST_DISABLED == 'true' || $SAST_DISABLED == '1'
+      when: never
+    - if: $SAST_EXCLUDED_ANALYZERS =~ /pmd-apex/
+      when: never
+    - if: $CI_PIPELINE_SOURCE != "push" && $CI_COMMIT_REF_NAME != "main"
+      exists:
+        - '**/*.cls'
+
+semgrep-sast:
+  extends: .sast-analyzer
+  tags: 
+    - $AREA_PERMALINK
+    - $ENVIRONMENT
+  allow_failure: false
+  script:
+    - /analyzer run
+    - *evaluate_sast_vulnerabilities
+  rules:
+    - if: $CI_PIPELINE_SOURCE != "push" && $CI_COMMIT_REF_NAME != "main"
+      exists:
+          - '**/*.py'
+          - '**/*.js'
+          - '**/*.jsx'
+          - '**/*.ts'
+          - '**/*.tsx'
+          - '**/*.c'
+          - '**/*.go'
+          - '**/*.java'
+          - '**/*.cs'
+          - '**/*.html'
+          - '**/*.scala'
+          - '**/*.sc'
+    - if: $SAST_DISABLED == 'true' || $SAST_DISABLED == '1'
+      when: never
+    - if: $SAST_EXCLUDED_ANALYZERS =~ /semgrep/
+      when: never
+  artifacts:
+    paths: [gl-sast-report.json]
+    reports:
+      sast: gl-sast-report.json
+
+
+sobelow-sast:
+  tags: 
+    - $AREA_PERMALINK
+    - $ENVIRONMENT
+  extends: .sast-analyzer
+  allow_failure: false
+  script:
+    - /analyzer run
+    - *evaluate_sast_vulnerabilities
+  rules:
+    - if: $SAST_DISABLED == 'true' || $SAST_DISABLED == '1'
+      when: never
+    - if: $SAST_EXCLUDED_ANALYZERS =~ /sobelow/
+      when: never
+    - if: $CI_PIPELINE_SOURCE != "push" && $CI_COMMIT_REF_NAME != "main"
+      exists:
+        - '**/mix.exs'
+
+spotbugs-sast:
+  tags: 
+    - $AREA_PERMALINK
+    - $ENVIRONMENT
+  extends: .sast-analyzer
+  allow_failure: false
+  script:
+    - /analyzer run
+    - *evaluate_sast_vulnerabilities
+  rules:
+    - if: $SAST_EXCLUDED_ANALYZERS =~ /spotbugs/
+      when: never
+    - if: $SAST_EXPERIMENTAL_FEATURES == 'true'
+      exists:
+        - '**/AndroidManifest.xml'
+      when: never
+    - if: $SAST_DISABLED == 'true' || $SAST_DISABLED == '1'
+      when: never
+    - if: $CI_PIPELINE_SOURCE != "push" && $CI_COMMIT_REF_NAME != "main"
+      exists:
+        - '**/*.groovy'
+        - '**/*.scala'
+        - '**/*.kt'
+
+nodejs-scan-sast:
+  tags: 
+    - $AREA_PERMALINK
+    - $ENVIRONMENT
+  extends: .sast-analyzer
+  script:
+    - /analyzer run
+    - *evaluate_sast_vulnerabilities
+  rules:
+    # - if: $CI_PIPELINE_SOURCE != "push" && $CI_COMMIT_REF_NAME != "main"
+    #   when: never
+    - if: $SAST_DISABLED == 'true' || $SAST_DISABLED == '1'
+      when: never
+    - if: $SAST_EXCLUDED_ANALYZERS =~ /nodejs-scan/
+      when: never
+    - if: $CI_PIPELINE_SOURCE != "push" && $CI_COMMIT_REF_NAME != "main"
+      exists:
+        - '**/package.json'
+    #- if: $CI_PIPELINE_SOURCE != "push" && $CI_COMMIT_REF_NAME != "main"
+
+### Secret Detection
+secret_detection:
+  tags: 
+    - $AREA_PERMALINK
+    - $ENVIRONMENT
+  allow_failure: false
+  variables:
+    SECRET_DETECTION_LOG_OPTIONS: "${CI_COMMIT_REF_NAME}"   
+  script:
+    - git checkout ${CI_COMMIT_REF_NAME}
+    - /analyzer run
+    - |
+        printf "Evaluating results...\n"
+        json_pp() {
+            cat "$1" | sed 's/{/{\n/g; s/}/\n}/g; s/,/,\n/g; s/":"/": "/g' | sed '/}/s/\n//g'
+        }
+        json_pp gl-secret-detection-report.json
+        RED='\033[0;31m'
+        GREEN='\033[0;32m'
+        NC='\033[0m' # No Color
+        if grep -q '"vulnerabilities":\[\]' gl-secret-detection-report.json; then
+        printf "${GREEN}\nNo secrets found :)\nGood to go!${NC}\n"
+        else
+            printf "${RED}\nSecrets found!!!\nPlease check the vulnerabilities array above or the report gl-secret-detection-report.json for more info.${NC}\n"
+            exit 1
+        fi
+  rules:
+    - if: $CI_PIPELINE_SOURCE != "push" && $CI_COMMIT_REF_NAME != "main"
+    - if: $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME
+
+kics-iac-sast:
+  tags:
+    - $AREA_PERMALINK
+    - $ENVIRONMENT
+  allow_failure: false
+  script:
+    - /analyzer run
+    - *evaluate_vulnerabilities
+  rules:  
+    - if: $CI_PIPELINE_SOURCE != "push" && $CI_COMMIT_REF_NAME != "main"
