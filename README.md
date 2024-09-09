@@ -6,9 +6,7 @@
 
 ---
 
-## Introduction
-
-This project integrates GitLab security scanning tools to ensure **vulnerable code** and **secrets** are never executed or deployed into any environment. By setting up a series of **security scan jobs** and **customized checks** in the CI/CD pipeline, we effectively prevent unsafe code from progressing beyond the development phase. The diagram above illustrates how this process works.
+Never Ever Run Unsafe Code (NERUC) integrates GitLab security scanning tools to ensure **vulnerable code** and **secrets** are never executed or deployed into any environment. By setting up a series of **security scan jobs** and **customized checks** in the CI/CD pipeline, it effectively prevents unsafe code from ever being executed even in the development phase. The diagram above illustrates how this process works.
 
 - **Key objective**: Prevent deployment of insecure code that contains vulnerabilities or secrets.
 - **Tools used**: GitLab SAST (Static Application Security Testing), secret detection, Semgrep, Brakeman, and more.
@@ -19,12 +17,11 @@ This project integrates GitLab security scanning tools to ensure **vulnerable co
 ### Online Setup
 
 1. **Duplicate Security Jobs**  
-   This project duplicates all GitLab's built-in security scan jobs and adds custom evaluation rules to automatically stop the pipeline if any critical vulnerabilities are found.
+   This project duplicates all GitLab's built-in security scan jobs and adds custom evaluation rules to stop the pipeline if any critical vulnerabilities are found.
    
-   You can find more information on GitLab's security scanning features here:  
-   [GitLab SAST Documentation](https://docs.gitlab.com/ee/user/application_security/sast/)  
+   You can find more information on GitLab's security scanning features here: [GitLab SAST Documentation](https://docs.gitlab.com/ee/user/application_security/sast/)  
    
-   To add these checks, we've included the following templates in the `.gitlab-ci.yml` file:
+   To add these checks, I've included the following templates in the `.gitlab-ci.yml` file:
    
    ```yaml
    include:
@@ -32,7 +29,7 @@ This project integrates GitLab security scanning tools to ensure **vulnerable co
      - template: Security/SAST.gitlab-ci.yml
      - template: Security/Secret-Detection.gitlab-ci.yml
    ```
-   Customize the scan jobs with additional evaluation steps that stops the jobs in the next stage when a vulnerability is found, such as:
+   Customize the scan jobs with additional evaluation steps that stop the jobs in the next stage when a vulnerability is found, such as:
    ```yaml
    .evaluate_vulnerabilities: &evaluate_vulnerabilities
     - |
@@ -45,7 +42,7 @@ This project integrates GitLab security scanning tools to ensure **vulnerable co
       fi
    ```
 2. **Custom Rules**  
-You can customize when certain scan jobs should run. For instance, in this project, we limit scanning to the main branch:
+You can customize when certain scan jobs should run. For instance, in this project, I limit scanning to the main branch(because the code is already safe!):
 
 ```yaml
 rules:
@@ -55,7 +52,7 @@ rules:
 
 ### Offline Setup
 If you run an offline GitLab instance or the runner doesn't have access to the internet, you can pull the security scanning images, store them in an internal container registry, and reference them in the pipeline. Please make sure that you keep updating your images.
-Refer to the official GitLab documentation on offline deployments for more details: [GitLab Security Scans Offline Deployment](!https://docs.gitlab.com/ee/user/application_security/offline_deployments/)
+Refer to the official GitLab documentation on offline deployments for more details: [GitLab Security Scans Offline Deployment](https://docs.gitlab.com/ee/user/application_security/offline_deployments/)
 
 You will need to update the security scanning job with the appropriate image path:
 
